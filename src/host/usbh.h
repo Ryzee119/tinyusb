@@ -78,6 +78,12 @@ static inline bool tuh_ready(uint8_t dev_addr)
   return tuh_mounted(dev_addr) && !tuh_suspended(dev_addr);
 }
 
+// Check if the control transfer is busy. (tuh has a shared control buffer, so can only handle one transaction at at time)
+bool tuh_control_busy(void);
+
+// Check if the hsot stack is enumerating a device.
+bool tuh_is_enumerating(void);
+
 // Carry out control transfer
 bool tuh_control_xfer (uint8_t dev_addr, tusb_control_request_t const* request, void* buffer, tuh_control_complete_cb_t complete_cb);
 
