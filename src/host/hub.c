@@ -32,6 +32,7 @@
 #include "usbh_classdriver.h"
 #include "hub.h"
 
+extern bool enum_lock;
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF
 //--------------------------------------------------------------------+
@@ -145,6 +146,12 @@ bool hub_port_get_status(uint8_t hub_addr, uint8_t hub_port, void* resp, tuh_con
   return true;
 }
 
+bool hub_port_has_changed(uint8_t hub_addr, uint8_t hub_port)
+{
+  hub_interface_t* p_hub = get_itf(hub_addr);
+  return ((1 << hub_port) & p_hub->status_change);
+}
+
 //--------------------------------------------------------------------+
 // CLASS-USBH API (don't require to verify parameters)
 //--------------------------------------------------------------------+
@@ -255,7 +262,8 @@ static bool config_port_power_complete (uint8_t dev_addr, tusb_control_request_t
   {
     // All ports are power -> queue notification status endpoint and
     // complete the SET CONFIGURATION
-    TU_ASSERT( usbh_edpt_xfer(dev_addr, p_hub->ep_in, &p_hub->status_change, 1) );
+    //Start reading in pipe to detect status changes
+    hub_status_pipe_queue(dev_addr);
 
     usbh_driver_set_config_complete(dev_addr, p_hub->itf_num);
   }else
@@ -274,6 +282,7 @@ static bool config_port_power_complete (uint8_t dev_addr, tusb_control_request_t
 
 static bool connection_get_status_complete (uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result);
 static bool connection_clear_conn_change_complete (uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result);
+static bool feature_clear_complete (uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result);
 static bool connection_port_reset_complete (uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result);
 
 // callback as response of interrupt endpoint polling
@@ -287,6 +296,13 @@ bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32
 
   TU_LOG2("  Port Status Change = 0x%02X\r\n", p_hub->status_change);
 
+  if (tuh_is_enumerating() == true || tuh_control_busy())
+  {
+    //The usb stack is busy with enumeration or other control transfers, just requeue the transfer
+    //and we can try again next frame
+    hub_status_pipe_queue(dev_addr);
+    return true;
+  }
   // Hub ignore bit0 in status change
   for (uint8_t port=1; port <= p_hub->port_count; port++)
   {
@@ -296,8 +312,6 @@ bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32
       break;
     }
   }
-
-  // NOTE: next status transfer is queued by usbh.c after handling this request
 
   return true;
 }
@@ -317,13 +331,28 @@ static bool connection_get_status_complete (uint8_t dev_addr, tusb_control_reque
 
     // Acknowledge Port Connection Change
     hub_port_clear_feature(dev_addr, port_num, HUB_FEATURE_PORT_CONNECTION_CHANGE, connection_clear_conn_change_complete);
-  }else
+  }
+  else if (p_hub->port_status.change.reset)
   {
-    // Other changes are: Enable, Suspend, Over Current, Reset, L1 state
-    // TODO clear change
-
+    hub_port_clear_feature(dev_addr, port_num, HUB_FEATURE_PORT_RESET_CHANGE, feature_clear_complete);
+  }
+  else if (p_hub->port_status.change.port_enable)
+  {
+    TU_LOG2("Warning: Hub %02x, Port %02x was disabled due to an error\n", dev_addr, port_num);
+    //Note the usb system will issue a port reset later to reenable it automatically.
+    hub_port_clear_feature(dev_addr, port_num, HUB_FEATURE_PORT_ENABLE_CHANGE, feature_clear_complete);
+  }
+  else if (p_hub->port_status.change.over_current)
+  {
+    TU_LOG1("Warning: Hub %02x, Port %02x detected over current\n", dev_addr, port_num);
+    hub_port_clear_feature(dev_addr, port_num, HUB_FEATURE_PORT_OVER_CURRENT_CHANGE, feature_clear_complete);
+  }
+  else
+  {
     // prepare for next hub status
-    // TODO continue with status_change, or maybe we can do it again with status
+    // Other changes are: Suspend, L1 state
+    // TODO clear change
+    TU_LOG1("Unsupported hub status %04x\n", p_hub->port_status.change);
     hub_status_pipe_queue(dev_addr);
   }
 
@@ -356,8 +385,16 @@ static bool connection_clear_conn_change_complete (uint8_t dev_addr, tusb_contro
     };
 
     hcd_event_handler(&event, false);
+    hub_status_pipe_queue(dev_addr);
   }
 
+  return true;
+}
+
+static bool feature_clear_complete (uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
+{
+  TU_ASSERT(result == XFER_RESULT_SUCCESS);
+  hub_status_pipe_queue(dev_addr);
   return true;
 }
 
@@ -381,6 +418,7 @@ static bool connection_port_reset_complete (uint8_t dev_addr, tusb_control_reque
   };
 
   hcd_event_handler(&event, false);
+  hub_status_pipe_queue(dev_addr);
 
   return true;
 }
