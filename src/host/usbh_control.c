@@ -48,6 +48,7 @@ typedef struct
 } usbh_control_xfer_t;
 
 static usbh_control_xfer_t _ctrl_xfer;
+static bool ctrl_lock = false;
 
 //CFG_TUSB_MEM_SECTION CFG_TUSB_MEM_ALIGN
 //static uint8_t _tuh_ctrl_buf[CFG_TUH_ENUMERATION_BUFSIZE];
@@ -55,9 +56,17 @@ static usbh_control_xfer_t _ctrl_xfer;
 //--------------------------------------------------------------------+
 // MACRO TYPEDEF CONSTANT ENUM DECLARATION
 //--------------------------------------------------------------------+
+bool tuh_control_busy (void)
+{
+  return ctrl_lock;
+}
 
 bool tuh_control_xfer (uint8_t dev_addr, tusb_control_request_t const* request, void* buffer, tuh_control_complete_cb_t complete_cb)
 {
+  TU_ASSERT(ctrl_lock == false);
+
+  ctrl_lock = true;
+
   // TODO need to claim the endpoint first
   const uint8_t rhport = usbh_get_rhport(dev_addr);
 
@@ -78,6 +87,7 @@ bool tuh_control_xfer (uint8_t dev_addr, tusb_control_request_t const* request, 
 
 static void _xfer_complete(uint8_t dev_addr, xfer_result_t result)
 {
+  ctrl_lock = false;
   TU_LOG2("\r\n");
   if (_ctrl_xfer.complete_cb) _ctrl_xfer.complete_cb(dev_addr, &_ctrl_xfer.request, result);
 }
