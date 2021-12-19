@@ -138,6 +138,17 @@ enum { ADDR_INVALID  = 0xFFu };
 
 static usbh_class_driver_t const usbh_class_drivers[] =
 {
+  #if CFG_TUH_XINPUT
+    {
+      DRIVER_NAME("XINPUT")
+      .init       = xinputh_init,
+      .open       = xinputh_open,
+      .set_config = xinputh_set_config,
+      .xfer_cb    = xinputh_xfer_cb,
+      .close      = xinputh_close
+    },
+  #endif
+
   #if CFG_TUH_CDC
     {
       DRIVER_NAME("CDC")
