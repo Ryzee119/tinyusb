@@ -42,12 +42,14 @@ typedef struct
   uint8_t ep_in;
   uint8_t port_count;
   uint8_t status_change; // data from status change interrupt endpoint
+  uint8_t pad0[64];
 
   hub_port_status_response_t port_status;
+  uint8_t pad1[64];
 } hub_interface_t;
 
 CFG_TUSB_MEM_SECTION static hub_interface_t hub_data[CFG_TUH_HUB];
-CFG_TUSB_MEM_SECTION TU_ATTR_ALIGNED(4) static uint8_t _hub_buffer[sizeof(descriptor_hub_desc_t)];
+CFG_TUSB_MEM_SECTION TU_ATTR_ALIGNED(4) static uint8_t _hub_buffer[64];
 
 TU_ATTR_ALWAYS_INLINE
 static inline hub_interface_t* get_itf(uint8_t dev_addr)
@@ -298,6 +300,7 @@ bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32
 
   if (tuh_is_enumerating() == true || tuh_control_busy())
   {
+    TU_LOG1("busy, requeue enum:%d control:%d\n", tuh_is_enumerating(), tuh_control_busy() );
     //The usb stack is busy with enumeration or other control transfers, just requeue the transfer
     //and we can try again next frame
     hub_status_pipe_queue(dev_addr);
