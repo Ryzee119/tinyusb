@@ -626,7 +626,8 @@ static bool enum_set_config_complete            (uint8_t dev_addr, tusb_control_
 static bool parse_configuration_descriptor      (uint8_t dev_addr, tusb_desc_configuration_t const* desc_cfg);
 
 //Track the port status of the hub for the enumerating device (if not root hub)
-static hub_port_status_response_t port_status;
+static uint8_t _hub_status[64];
+static hub_port_status_response_t *port_status = (hub_port_status_response_t *)_hub_status;
 
 //We only want to enumerate one device at a time.
 static bool enum_lock = false;
@@ -638,6 +639,7 @@ bool tuh_is_enumerating(void)
 
 static bool enum_new_device(hcd_event_t* event)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   enum_lock = true;
   _dev0.rhport   = event->rhport; // TODO refractor integrate to device_pool
   _dev0.hub_addr = event->connection.hub_addr;
@@ -665,7 +667,7 @@ static bool enum_new_device(hcd_event_t* event)
   else
   {
     //Get the latest port status from the hub after debounce delay
-    hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, &port_status, enum_device_reset1);
+    hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, port_status, enum_device_reset1);
   }
 #endif
 
@@ -674,6 +676,7 @@ static bool enum_new_device(hcd_event_t* event)
 
 static bool enum_device_reset1(uint8_t dev_addr, tusb_control_request_t const *request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
   if (_dev0.hub_addr == 0)
@@ -685,7 +688,7 @@ static bool enum_device_reset1(uint8_t dev_addr, tusb_control_request_t const *r
 #if CFG_TUH_HUB
   else
   {
-    if (!port_status.status.connection)
+    if (!port_status->status.connection)
     {
       //Device has been disconnected from downstream hub, clear lock and abort enumeration
       enum_lock = false;
@@ -693,8 +696,8 @@ static bool enum_device_reset1(uint8_t dev_addr, tusb_control_request_t const *r
     else
     {
       //Assign speed to device and continue to reset
-      _dev0.speed = (port_status.status.high_speed) ? TUSB_SPEED_HIGH :
-                    (port_status.status.high_speed) ? TUSB_SPEED_LOW : TUSB_SPEED_FULL;
+      _dev0.speed = (port_status->status.high_speed) ? TUSB_SPEED_HIGH :
+                    (port_status->status.high_speed) ? TUSB_SPEED_LOW : TUSB_SPEED_FULL;
       //Reset device
       hub_port_reset(_dev0.hub_addr, _dev0.hub_port, enum_device_reset1_complete);
     }
@@ -706,6 +709,7 @@ static bool enum_device_reset1(uint8_t dev_addr, tusb_control_request_t const *r
 
 static bool enum_device_reset1_complete(uint8_t dev_addr, tusb_control_request_t const *request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
   //RESET SETTLE
   osal_task_delay(RESET_DELAY);
@@ -714,7 +718,7 @@ static bool enum_device_reset1_complete(uint8_t dev_addr, tusb_control_request_t
 #if CFG_TUH_HUB
   if (_dev0.hub_addr != 0)
   {
-    hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, &port_status, enum_get_device_desc8);
+    hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, port_status, enum_get_device_desc8);
   }
   else
 #endif
@@ -727,10 +731,11 @@ static bool enum_device_reset1_complete(uint8_t dev_addr, tusb_control_request_t
 
 static bool enum_get_device_desc8(uint8_t dev_addr, tusb_control_request_t const *request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
 #if CFG_TUH_HUB
-  if (_dev0.hub_addr != 0 && !port_status.status.connection)
+  if (_dev0.hub_addr != 0 && !port_status->status.connection)
   {
     //Device has been disconnected from downstream hub, clear lock and abort enumeration
     enum_lock = false;
@@ -763,6 +768,7 @@ static bool enum_get_device_desc8(uint8_t dev_addr, tusb_control_request_t const
 // After Get Device Descriptor of Address 0
 static bool enum_get_addr0_device_desc_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
   TU_ASSERT(0 == dev_addr);
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
@@ -784,6 +790,7 @@ static bool enum_get_addr0_device_desc_complete(uint8_t dev_addr, tusb_control_r
 
 static bool enum_device_reset2_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
   //RESET SETTLE
   osal_task_delay(RESET_DELAY);
@@ -796,7 +803,7 @@ static bool enum_device_reset2_complete(uint8_t dev_addr, tusb_control_request_t
 #if CFG_TUH_HUB
   else
   {
-    hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, &port_status, enum_set_address);
+    hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, port_status, enum_set_address);
   }
 #endif
   return true;
@@ -804,10 +811,11 @@ static bool enum_device_reset2_complete(uint8_t dev_addr, tusb_control_request_t
 
 static bool enum_set_address(uint8_t dev_addr, tusb_control_request_t const *request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
 #if CFG_TUH_HUB
-  if (_dev0.hub_addr != 0 && !port_status.status.connection)
+  if (_dev0.hub_addr != 0 && !port_status->status.connection)
   {
     //Device has been disconnected from downstream hub, clear lock and abort enumeration
     enum_lock = false;
@@ -855,6 +863,7 @@ static bool enum_set_address(uint8_t dev_addr, tusb_control_request_t const *req
 // After SET_ADDRESS is complete
 static bool enum_set_address_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   TU_ASSERT(0 == dev_addr);
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
@@ -892,6 +901,7 @@ static bool enum_set_address_complete(uint8_t dev_addr, tusb_control_request_t c
 
 static bool enum_get_device_desc_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
@@ -928,6 +938,7 @@ static bool enum_get_device_desc_complete(uint8_t dev_addr, tusb_control_request
 
 static bool enum_get_9byte_config_desc_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
@@ -963,6 +974,7 @@ static bool enum_get_9byte_config_desc_complete(uint8_t dev_addr, tusb_control_r
 
 static bool enum_get_config_desc_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
@@ -992,6 +1004,7 @@ static bool enum_get_config_desc_complete(uint8_t dev_addr, tusb_control_request
 
 static bool enum_set_config_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
+  TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
   TU_ASSERT(XFER_RESULT_SUCCESS == result);
 
