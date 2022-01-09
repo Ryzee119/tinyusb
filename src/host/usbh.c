@@ -206,7 +206,7 @@ static usbh_class_driver_t const usbh_class_drivers[] =
 
 enum { USBH_CLASS_DRIVER_COUNT = TU_ARRAY_SIZE(usbh_class_drivers) };
 
-enum { RESET_DELAY = 100 };  // 200 USB specs say only 50ms but many devices require much longer
+enum { RESET_DELAY = 200 };  // 200 USB specs say only 50ms but many devices require much longer
 
 enum { CONFIG_NUM = 1 }; // default to use configuration 1
 
