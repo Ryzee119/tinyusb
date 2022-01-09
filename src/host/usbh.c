@@ -206,9 +206,11 @@ static usbh_class_driver_t const usbh_class_drivers[] =
 
 enum { USBH_CLASS_DRIVER_COUNT = TU_ARRAY_SIZE(usbh_class_drivers) };
 
-enum { RESET_DELAY = 50 };  // 200 USB specs say only 50ms but many devices require much longer
+enum { RESET_DELAY = 100 };  // 200 USB specs say only 50ms but many devices require much longer
 
 enum { CONFIG_NUM = 1 }; // default to use configuration 1
+
+enum { ENUM_MAX_RETRY = 3 }; // Retry count if enumeration errors occur
 
 
 //--------------------------------------------------------------------+
@@ -631,6 +633,7 @@ static hub_port_status_response_t *port_status = (hub_port_status_response_t *)_
 
 //We only want to enumerate one device at a time.
 static bool enum_lock = false;
+static uint8_t enum_retry_cnt = 0;
 
 bool tuh_is_enumerating(void)
 {
@@ -641,6 +644,7 @@ static bool enum_new_device(hcd_event_t* event)
 {
   TU_LOG1("%s\n", __FUNCTION__);
   enum_lock = true;
+  enum_retry_cnt = 0;
   _dev0.rhport   = event->rhport; // TODO refractor integrate to device_pool
   _dev0.hub_addr = event->connection.hub_addr;
   _dev0.hub_port = event->connection.hub_port;
@@ -729,10 +733,30 @@ static bool enum_device_reset1_complete(uint8_t dev_addr, tusb_control_request_t
   return true;
 }
 
+static int _enum_retry_or_error(uint8_t dev_addr)
+{
+  if (enum_retry_cnt < ENUM_MAX_RETRY)
+  {
+    enum_retry_cnt++;
+    TU_LOG1("Enum error, Retry %d\n", enum_retry_cnt);
+    enum_device_reset1(dev_addr, NULL, XFER_RESULT_SUCCESS);
+    return 0;
+  }
+  else
+  {
+    enum_lock = 0;
+    return -1;
+  }
+}
+
 static bool enum_get_device_desc8(uint8_t dev_addr, tusb_control_request_t const *request, xfer_result_t result)
 {
   TU_LOG1("%s\n", __FUNCTION__);
-  TU_ASSERT(XFER_RESULT_SUCCESS == result);
+  if (XFER_RESULT_SUCCESS != result)
+  {
+    TU_ASSERT(_enum_retry_or_error(dev_addr) == 0);
+    return true;
+  }
 
 #if CFG_TUH_HUB
   if (_dev0.hub_addr != 0 && !port_status->status.connection)
@@ -770,8 +794,11 @@ static bool enum_get_addr0_device_desc_complete(uint8_t dev_addr, tusb_control_r
 {
   TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
-  TU_ASSERT(0 == dev_addr);
-  TU_ASSERT(XFER_RESULT_SUCCESS == result);
+  if (XFER_RESULT_SUCCESS != result)
+  {
+    TU_ASSERT(_enum_retry_or_error(dev_addr) == 0);;
+    return true;
+  }
 
   //Perform 2nd reset after desc8
   if (_dev0.hub_addr == 0)
@@ -791,7 +818,12 @@ static bool enum_get_addr0_device_desc_complete(uint8_t dev_addr, tusb_control_r
 static bool enum_device_reset2_complete(uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result)
 {
   TU_LOG1("%s\n", __FUNCTION__);
-  TU_ASSERT(XFER_RESULT_SUCCESS == result);
+  if (XFER_RESULT_SUCCESS != result)
+  {
+    TU_ASSERT(_enum_retry_or_error(dev_addr) == 0);
+    return true;
+  }
+
   //RESET SETTLE
   osal_task_delay(RESET_DELAY);
 
@@ -894,6 +926,10 @@ static bool enum_set_address_complete(uint8_t dev_addr, tusb_control_request_t c
     .wLength  = sizeof(tusb_desc_device_t)
   };
 
+  //If the SET_ADDRESS is successful, the hub driver will wait for at least 10ms to allow
+  //for device stabilization before moving to the “Second Device Descriptor Request” state.
+  osal_task_delay(10);
+
   TU_ASSERT(tuh_control_xfer(new_addr, &new_request, _usbh_ctrl_buf, enum_get_device_desc_complete));
 
   return true;
@@ -903,7 +939,11 @@ static bool enum_get_device_desc_complete(uint8_t dev_addr, tusb_control_request
 {
   TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
-  TU_ASSERT(XFER_RESULT_SUCCESS == result);
+  if (XFER_RESULT_SUCCESS != result)
+  {
+    TU_ASSERT(_enum_retry_or_error(dev_addr) == 0);
+    return true;
+  }
 
   tusb_desc_device_t const * desc_device = (tusb_desc_device_t const*) _usbh_ctrl_buf;
   usbh_device_t* dev = get_device(dev_addr);
@@ -940,7 +980,11 @@ static bool enum_get_9byte_config_desc_complete(uint8_t dev_addr, tusb_control_r
 {
   TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
-  TU_ASSERT(XFER_RESULT_SUCCESS == result);
+  if (XFER_RESULT_SUCCESS != result)
+  {
+    TU_ASSERT(_enum_retry_or_error(dev_addr) == 0);
+    return true;
+  }
 
   // TODO not enough buffer to hold configuration descriptor
   uint8_t const * desc_config = _usbh_ctrl_buf;
@@ -976,7 +1020,11 @@ static bool enum_get_config_desc_complete(uint8_t dev_addr, tusb_control_request
 {
   TU_LOG1("%s\n", __FUNCTION__);
   (void) request;
-  TU_ASSERT(XFER_RESULT_SUCCESS == result);
+  if (XFER_RESULT_SUCCESS != result)
+  {
+    TU_ASSERT(_enum_retry_or_error(dev_addr) == 0);
+    return true;
+  }
 
   // Parse configuration & set up drivers
   // Driver open aren't allowed to make any usb transfer yet
