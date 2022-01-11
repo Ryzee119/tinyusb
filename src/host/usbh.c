@@ -593,7 +593,6 @@ void usbh_driver_set_config_complete(uint8_t dev_addr, uint8_t itf_num)
       usbh_class_driver_t const * driver = &usbh_class_drivers[drv_id];
       TU_LOG2("%s set config: itf = %u\r\n", driver->name, itf_num);
       driver->set_config(dev_addr, itf_num);
-      break;
     }
   }
 
