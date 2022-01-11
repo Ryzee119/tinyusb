@@ -311,6 +311,12 @@ bool ehci_init(uint8_t rhport, uint32_t capability_reg, uint32_t operatial_reg)
   //------------- ConfigFlag Register (skip) -------------//
   regs->portsc_bm.port_power = 1; // enable port power
 
+  if (hcd_port_connect_status(rhport))
+  {
+    hcd_port_reset(rhport);
+    hcd_event_device_attach(rhport, false);
+  }
+
   return true;
 }
 
