@@ -700,7 +700,7 @@ static bool enum_device_reset1(uint8_t dev_addr, tusb_control_request_t const *r
     {
       //Assign speed to device and continue to reset
       _dev0.speed = (port_status->status.high_speed) ? TUSB_SPEED_HIGH :
-                    (port_status->status.high_speed) ? TUSB_SPEED_LOW : TUSB_SPEED_FULL;
+                    (port_status->status.low_speed) ? TUSB_SPEED_LOW : TUSB_SPEED_FULL;
       //Reset device
       hub_port_reset(_dev0.hub_addr, _dev0.hub_port, enum_device_reset1_complete);
     }
