@@ -123,7 +123,7 @@
 //--------------------------------------------------------------------+
 
 // TODO refactor since __attribute__ is supported across many compiler
-#if defined(__GNUC__)
+#if defined(__GNUC__) || defined (__clang__)
   #define TU_ATTR_ALIGNED(Bytes)        __attribute__ ((aligned(Bytes)))
   #define TU_ATTR_SECTION(sec_name)     __attribute__ ((section(#sec_name)))
   #define TU_ATTR_PACKED                __attribute__ ((packed))
@@ -174,6 +174,11 @@
   // Put it here since only gcc support this pragma
 		#pragma GCC poison tud_vendor_control_request_cb
 	#endif
+
+  #if defined (__clang__)
+    #undef TU_ATTR_WEAK
+    #define TU_ATTR_WEAK __attribute__ ((weak_import))
+  #endif
 
 #elif defined(__TI_COMPILER_VERSION__)
   #define TU_ATTR_ALIGNED(Bytes)        __attribute__ ((aligned(Bytes)))
