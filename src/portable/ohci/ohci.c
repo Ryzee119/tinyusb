@@ -549,12 +549,45 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
   return true;
 }
 
-bool hcd_edpt_abort_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
-  (void) rhport;
-  (void) dev_addr;
-  (void) ep_addr;
-  // TODO not implemented yet
-  return false;
+bool hcd_edpt_abort_xfer (uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr)
+{
+    (void)rhport;
+
+    ohci_ed_t *const p_ed = ed_from_addr(dev_addr, ep_addr);
+
+    // There is no transfer to abort
+    if (p_ed->td_tail == tu_align16(p_ed->td_head.address)) {
+      return false;
+    }
+
+    // Prevent OHCI processing this ED while we clear TDs
+    p_ed->skip = 1;
+
+    // We need to wait one USB frame to ensure OHCI is not processing this ED
+    osal_task_delay(1);
+
+    ohci_td_item_t *td_head = _virt_addr((void *)tu_align16(p_ed->td_head.address));
+    ohci_td_item_t *td_tail = _virt_addr((void *)tu_align16(p_ed->td_tail));
+
+    // Recheck for active transfers incase OHCI completed transfer while we were waiting
+    bool was_active = td_head != td_tail;
+
+    // Free any in-flight transfers
+    while(td_head != td_tail) {
+      if (p_ed->is_iso) {
+        // FIXME: Cleanup iso transfers too
+        // ohci_itd_t *itd = (ohci_itd_t *)td_head;
+        // itd->used = 0;
+      } else {
+        ohci_gtd_t *gtd = (ohci_gtd_t *)td_head;
+        gtd->used = 0;
+      }
+      td_head = _virt_addr((void *)td_head->next);
+    }
+
+    p_ed->skip = 0;
+
+    return was_active;
 }
 
 bool hcd_edpt_clear_stall(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
