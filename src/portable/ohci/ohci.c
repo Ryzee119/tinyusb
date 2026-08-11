@@ -331,13 +331,16 @@ static void gtd_init(ohci_gtd_t *p_td, uint8_t *data_ptr, uint16_t total_bytes) 
   p_td->delay_interrupt = OHCI_INT_ON_COMPLETE_NO;
   p_td->condition_code = OHCI_CCODE_NOT_ACCESSED;
 
-  uint8_t *cbp = (uint8_t *) _phys_addr(data_ptr);
-
-  p_td->current_buffer_pointer = cbp;
+  // Ref 6.4.4.2 Packet Address and Size Calculation
+  // The remaining buffer size is found by buffer_end - current_buffer_pointer + 1.
+  // Therefore if current_buffer_pointer == buffer_end OHCI will transfer 1 byte.
+  // To handle zero byte transfers; there is a special case. When cpb == 0 (NULL), then the packet size will be zero.
   if ( total_bytes ) {
+    p_td->current_buffer_pointer = _phys_addr(data_ptr);
     p_td->buffer_end = _phys_addr(data_ptr + total_bytes - 1);
   } else {
-    p_td->buffer_end = cbp;
+    p_td->current_buffer_pointer = NULL;
+    p_td->buffer_end = NULL;
   }
 }
 
