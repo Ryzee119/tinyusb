@@ -160,12 +160,33 @@ typedef struct {
 } gtd_extra_data_t;
 TU_VERIFY_STATIC(sizeof(gtd_extra_data_t) == 2, "size is not correct" );
 
+// 1, 2, 4, 8, 16 or 32
+#ifndef CFG_TUH_OHCI_MAX_BINTERVAL
+#define CFG_TUH_OHCI_MAX_BINTERVAL 1
+#endif
+
+#define OHCI_PERIODIC_ED_COUNT  (CFG_TUH_OHCI_MAX_BINTERVAL * 2 - 1)
+
+#if CFG_TUH_OHCI_MAX_BINTERVAL >= 32
+  #define OHCI_MAX_BINTERVAL_LOG2 5
+#elif CFG_TUH_OHCI_MAX_BINTERVAL == 16
+  #define OHCI_MAX_BINTERVAL_LOG2 4
+#elif CFG_TUH_OHCI_MAX_BINTERVAL == 8
+  #define OHCI_MAX_BINTERVAL_LOG2 3
+#elif CFG_TUH_OHCI_MAX_BINTERVAL == 4
+  #define OHCI_MAX_BINTERVAL_LOG2 2
+#elif CFG_TUH_OHCI_MAX_BINTERVAL == 2
+  #define OHCI_MAX_BINTERVAL_LOG2 1
+#else
+  #define OHCI_MAX_BINTERVAL_LOG2 0
+#endif
+
 // structure with member alignment required from large to small
 typedef struct TU_ATTR_ALIGNED(256) {
   ohci_hcca_t hcca;
 
   ohci_ed_t bulk_head_ed; // static bulk head (dummy)
-  ohci_ed_t period_head_ed; // static periodic list head (dummy)
+  ohci_ed_t period_head_ed[OHCI_PERIODIC_ED_COUNT]; // static periodic list heads (dummy)
 
   // control endpoints has reserved resources
   struct {

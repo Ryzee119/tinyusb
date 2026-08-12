@@ -146,7 +146,7 @@ CFG_TUH_MEM_SECTION TU_ATTR_ALIGNED(256) static ohci_data_t ohci_data;
 static ohci_ed_t * const p_ed_head[] = {
     [TUSB_XFER_CONTROL]     = hcd_dcache_uncached(&ohci_data.control[0].ed),
     [TUSB_XFER_BULK   ]     = hcd_dcache_uncached(&ohci_data.bulk_head_ed),
-    [TUSB_XFER_INTERRUPT]   = hcd_dcache_uncached(&ohci_data.period_head_ed),
+    [TUSB_XFER_INTERRUPT]   = hcd_dcache_uncached(&ohci_data.period_head_ed[0]),
     [TUSB_XFER_ISOCHRONOUS] = NULL // TODO Isochronous
 };
 
@@ -173,6 +173,15 @@ TU_ATTR_ALWAYS_INLINE static inline void *_virt_addr(void *physical_address) {
   return tusb_app_phys_to_virt(physical_address);
 }
 
+static inline uint8_t rev_bits(uint8_t v, uint8_t num_bits) {
+  uint8_t rev = 0;
+  for (uint8_t i = 0; i < num_bits; i++) {
+    rev = (rev << 1) | (v & 1);
+    v >>= 1;
+  }
+  return rev;
+}
+
 // Initialization according to 5.1.1.4
 bool hcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
   (void) rhport;
@@ -182,14 +191,29 @@ bool hcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
 
   //------------- Data Structure init -------------//
   tu_memclr(&ohci_data, sizeof(ohci_data_t));
-  // assign all interrupt pointers to period head ed
-  for(uint8_t i=0; i<32; i++) {
-    ohci_data.hcca.interrupt_table[i] = (uint32_t) _phys_addr(&ohci_data.period_head_ed);
+
+  // Build a balanced binary tree of dummy EDs (root at 0, children at 2i+1 and 2i+2).
+  // The 'skip' bit ensures the Host Controller traverses them without processing transfers.
+  for (uint8_t i = 0; i < OHCI_PERIODIC_ED_COUNT; i++) {
+    ohci_data.period_head_ed[i].w0.skip = 1;
+    if (i > 0) {
+      uint8_t parent_idx = (i - 1) / 2;
+      ohci_data.period_head_ed[i].next = (uint32_t) _phys_addr(&ohci_data.period_head_ed[parent_idx]);
+    } else {
+      ohci_data.period_head_ed[i].next = 0;
+    }
+  }
+
+  // The HCCA interrupt table has 32 frame entries (OHCI Section 5.2.7.2).
+  // We map these linear slots to our static tree leaves using bit-reversal
+  // to interleave adjacent frames across separate sub-trees, evenly distributing bandwidth.
+  for (uint8_t i = 0; i < 32; i++) {
+    uint8_t leaf_idx = (CFG_TUH_OHCI_MAX_BINTERVAL - 1) + rev_bits(i % CFG_TUH_OHCI_MAX_BINTERVAL, OHCI_MAX_BINTERVAL_LOG2);
+    ohci_data.hcca.interrupt_table[i] = (uint32_t) _phys_addr(&ohci_data.period_head_ed[leaf_idx]);
   }
 
   ohci_data.control[0].ed.w0.skip  = 1;
   ohci_data.bulk_head_ed.w0.skip   = 1;
-  ohci_data.period_head_ed.w0.skip = 1;
 
   //If OHCI hardware is in SMM mode, gain ownership (Ref OHCI spec 5.1.1.3.3)
   if (OHCI_REG->control_bit.interrupt_routing == 1) {
@@ -277,7 +301,11 @@ void hcd_device_close(uint8_t rhport, uint8_t dev_addr) {
   } else {
     ed_list_remove_by_addr(p_ed_head[TUSB_XFER_CONTROL], dev_addr); // remove control
     ed_list_remove_by_addr(p_ed_head[TUSB_XFER_BULK], dev_addr); // remove bulk
-    ed_list_remove_by_addr(p_ed_head[TUSB_XFER_INTERRUPT], dev_addr); // remove interrupt
+
+    // remove from all interrupt lists
+    for (uint8_t i = 0; i < OHCI_PERIODIC_ED_COUNT; i++) {
+      ed_list_remove_by_addr(hcd_dcache_uncached(&ohci_data.period_head_ed[i]), dev_addr);
+    }
     // TODO remove ISO
   }
 }
@@ -380,6 +408,11 @@ static void ed_list_remove_by_addr(ohci_ed_t * p_head, uint8_t dev_addr) {
   while (p_prev->next) {
     ohci_ed_t* ed = (ohci_ed_t*)_virt_addr((void*)p_prev->next);
 
+    // Dummy nodes do not have the used bit set. Bail to prevent upward tree reversal
+    if (!ed->w0.used) {
+      break;
+    }
+
     if (ed->w0.dev_addr == dev_addr) {
       // Prevent Host Controller from processing this ED while we remove it
       ed->w0.skip = 1;
@@ -400,6 +433,7 @@ static void ed_list_remove_by_addr(ohci_ed_t * p_head, uint8_t dev_addr) {
 static ohci_gtd_t* gtd_find_free(void) {
   for (uint8_t i = 0; i < GTD_MAX; i++) {
     if (!ohci_data.gtd_pool[i].used) {
+      ohci_data.gtd_pool[i].used = 1;
       return &ohci_data.gtd_pool[i];
     }
   }
@@ -443,7 +477,52 @@ bool hcd_edpt_open(uint8_t rhport, uint8_t dev_addr, tusb_desc_endpoint_t const*
     p_ed->td_tail = (uint32_t)_phys_addr(gtd);
   }
 
-  ed_list_insert(p_ed_head[ep_desc->bmAttributes.xfer], p_ed);
+  if (ep_desc->bmAttributes.xfer == TUSB_XFER_INTERRUPT) {
+    uint8_t interval = ep_desc->bInterval;
+
+    // OHCI hardware processes the HccaInterruptTable up to a maximum period of 32 frames (ms).
+    // The user configuration clamps this further.
+    if (interval > CFG_TUH_OHCI_MAX_BINTERVAL) {
+      interval = CFG_TUH_OHCI_MAX_BINTERVAL;
+    }
+
+    // Round down to the nearest power of 2 (1, 2, 4, 8, 16, 32) to match
+    // the static binary tree levels.
+    uint8_t interval_ms = 1;
+    while (interval_ms * 2 <= interval) {
+      interval_ms *= 2;
+    }
+
+    static uint8_t count[6] = {0};
+    uint8_t level;
+    switch(interval_ms) {
+      case 1: level = 0; break;
+      case 2: level = 1; break;
+      case 4: level = 2; break;
+      case 8: level = 3; break;
+      case 16: level = 4; break;
+      case 32: level = 5; break;
+      default: level = 0; break;
+    }
+    // We should allocate to a branch with the most bandwidth, however to keep it simple we just increment
+    // the node for each level each time an ed is allocated.
+    uint8_t offset = count[level] % interval_ms;
+    count[level]++;
+    uint8_t index = (interval_ms - 1) + offset;
+
+    ohci_ed_t* pre_ed = hcd_dcache_uncached(&ohci_data.period_head_ed[index]);
+    ed_list_insert(pre_ed, p_ed);
+
+    // Flush cache after modifying ED tree to ensure OHCI hardware sees the updated next pointers
+    hcd_dcache_clean(pre_ed, sizeof(ohci_ed_t));
+    if (dev_addr != 0) {
+      hcd_dcache_clean(p_ed, sizeof(ohci_ed_t));
+    }
+
+  } else {
+    ed_list_insert(p_ed_head[ep_desc->bmAttributes.xfer], p_ed);
+  }
+
   return true;
 }
 
